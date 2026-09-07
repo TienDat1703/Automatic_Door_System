@@ -8,7 +8,7 @@
 ## 📖 Overview
 
 This project implements an automatic door system using the STM32F407VET6 microcontroller.
-The system detects objects approaching the door using an HC-SR04 ultrasonic sensor and automatically opens or closes the door using a DC motor controlled by an L298N dual full-bridge motor driver.
+The system detects objects approaching the door using an HC-SR501 sensor and automatically opens or closes the door using a DC motor controlled by an L298N dual full-bridge motor driver.
 
 This project demonstrates an embedded system application that integrates electronic device analysis, hardware design, circuit simulation, and firmware development.
 
@@ -20,7 +20,7 @@ This project demonstrates an embedded system application that integrates electro
 * *Hardware Components:*
     * *Controller:* STM32F407VET6 (ARM Cortex-M4).
     * *Power Stage:* L298N Dual Full-Bridge Driver (Bipolar tech).
-    * *Sensor:* HC-SR04 (Ultrasonic Transducer).
+    * *Sensor:* HC-SR501 (Passive infrared sensor).
 * *Tools:*
     * *Altium Designer / Proteus:* For circuit design and simulation.
     * *STM32CubeIDE:* For firmware implementation.
@@ -43,46 +43,51 @@ The system consists of three main stages with specific electrical parameters:
 * *Logic High Voltage ($V_{IH}$):* $2.3V \le V_{in} \le V_{ss}$ (Compatible with STM32 3.3V logic).
 * *Power Dissipation:* Heatsink required for currents $> 1A$.
 
-### 3. Sensor Stage (HC-SR04)
-* *Operating Voltage:* $5V$ DC.
-* *Operating Current:* $15 \text{ mA}$.
-* *Frequency:* $40 \text{ kHz}$.
-* *Range:* $2 \text{ cm} - 400 \text{ cm}$.
-
-## 📊 System Operation Logic
-
-The circuit operates by switching the transistor states within the L298N H-Bridge to control current flow direction through the DC Motor.
-
-| Condition | Sensor Distance ($d$) | MCU Signal (PB0 / PB1) | H-Bridge State | Motor Action |
-| :--- | :--- | :--- | :--- | :--- |
-| *User Approaching* | $d < 15 \text{ cm}$ | HIGH / LOW | Q1, Q4 ON | *Forward (Open)* |
-| *Holding Open* | (Delay 3s) | LOW / LOW | All OFF | *Stop (Coast)* |
-| *User Away* | $d \ge 15 \text{ cm}$ | LOW / HIGH | Q2, Q3 ON | *Reverse (Close)* |
+### 3. Sensor Stage (HC-SR501 PIR Sensor)
+* *Operating Voltage:* $4.5V - 20V$ DC (Powered via $5V$ supply).
+* *Quiescent Current:* $< 50 \ \mu\text{A}$ (Low power consumption).
+* *Output Logic Level:* $3.3V$ High / $0V$ Low (Directly compatible with STM32 GPIO).
+* *Detection Angle:* $< 100^\circ$ cone angle.
+* *Detection Range:* $3\text{m} - 7\text{m}$ (Adjustable via onboard potentiometer).
+* *Delay Time:* $0.3\text{s} - 5\text{min}$ (Adjustable via onboard potentiometer).
+* *Operating Principle:* Passive Infrared (PIR) sensing detects thermal radiation changes from moving human bodies.
+  
 
 ## 💻 Firmware & Hardware Interface
 
 Although this is a hardware-centric project, *Firmware* is essential to generate the correct *Electrical Control Signals*. The STM32 is programmed in *Embedded C* using the *HAL Library* to manage the state of the GPIO pins.
 
 ### Control Logic Implementation
-The firmware implements a *Finite State Machine (FSM)* to control the voltage levels at pins PB0 and PB1, determining the conduction state of the transistors inside the L298N.
+The firmware implements a **Non-blocking Finite State Machine (FSM)**. Instead of using blocking delays (`HAL_Delay`), it uses `HAL_GetTick()` to track time while continuously monitoring sensors and limit switches for maximum safety and responsiveness.
 
-/* LOGIC TABLE FOR L298N CONTROL */
-// PB0 = High (3.3V), PB1 = Low (0V)  -> Current flows A to B -> Motor Opens
-// PB0 = Low (0V),  PB1 = High (3.3V) -> Current flows B to A -> Motor Closes
+/* LOGIC OVERVIEW FOR MOTOR CONTROL (L298N) */
+// IN1=HIGH, IN2=LOW  -> Motor Opens
+// IN1=LOW,  IN2=HIGH -> Motor Closes
+// IN1=LOW,  IN2=LOW  -> Motor Stops
 
-if (Distance < 15) // Sensor Input
+if (PIR_Motion_Detected) 
 {
-    // Action: OPEN DOOR
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);   // PB0 -> 3.3V
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET); // PB1 -> 0V
+    // Reset the 3-second hold timer
+    last_motion_time = HAL_GetTick(); 
     
-    HAL_Delay(3000); // Hold state for 3 seconds
-}
-else
+    // Safety Priority: Open door until Open Limit Switch (LS2) is hit
+    if (!Limit_Switch_Open) Open_Door();
+    else Stop_Motor();
+} 
+else 
 {
-    // Action: CLOSE DOOR
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET); // PB0 -> 0V
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);   // PB1 -> 3.3V
+    // Non-blocking 3-second hold delay check
+    if (HAL_GetTick() - last_motion_time < 3000) 
+    {
+        if (!Limit_Switch_Open) Open_Door();
+        else Stop_Motor();
+    } 
+    else 
+    {
+        // Close door after timeout until Close Limit Switch (LS1) is hit
+        if (!Limit_Switch_Close) Close_Door();
+        else Stop_Motor();
+    }
 }
 
 ## ⚙️ Installation & Setup
